@@ -1,0 +1,32 @@
+# Environment / secrets — never commit these
+.env
+
+# Session cookies
+teams_session.json
+
+# Meeting output (audio chunks + transcripts)
+meeting_output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Debug screenshots
+debug_*.png
