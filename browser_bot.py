@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 SESSION_FILE = "teams_session.json"
 
 _LAUNCH_ARGS = [
-    "--use-fake-ui-for-media-stream",
-    "--use-fake-device-for-media-stream",
+    "--use-fake-ui-for-media-stream",       # auto-accept mic/camera permission dialogs
+    # --use-fake-device-for-media-stream intentionally REMOVED:
+    # it generates a constant fake audio tone that Teams sends to participants causing a beep.
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -140,17 +141,21 @@ class TeamsBrowserBot:
         logger.debug("No app-download dialog found (may already be on web client)")
 
     async def _enter_guest_name(self) -> None:
+        # Wait for the pre-join page to fully render before looking for the name field
+        await asyncio.sleep(3)
         selectors = [
             "[data-tid='prejoin-display-name-input']",
             "input[placeholder*='name' i]",
             "input[aria-label*='name' i]",
             "#username-input",
+            "input[type='text']",
         ]
         for sel in selectors:
             try:
-                await self._page.wait_for_selector(sel, timeout=6000)
+                await self._page.wait_for_selector(sel, timeout=15000)
                 await self._page.triple_click(sel)
                 await self._page.fill(sel, self.display_name)
+                await asyncio.sleep(0.5)
                 logger.info("Entered guest name '%s' via selector: %s", self.display_name, sel)
                 return
             except Exception:
@@ -158,29 +163,51 @@ class TeamsBrowserBot:
         logger.warning("Could not find name-input field; joining without entering name")
 
     async def _ensure_av_off(self) -> None:
-        # Mute microphone
-        mic_selectors = ["[data-tid='toggle-mute']", "button[aria-label*='Mute' i]"]
+        """Mute mic AND turn off camera independently before joining."""
+        await asyncio.sleep(1)
+
+        # --- Mute microphone ---
+        mic_selectors = [
+            "[data-tid='toggle-mute']",
+            "button[aria-label*='Mute' i]",
+            "button[aria-label*='Microphone' i]",
+        ]
         for sel in mic_selectors:
             try:
-                elem = await self._page.wait_for_selector(sel, timeout=4000)
+                elem = await self._page.wait_for_selector(sel, timeout=5000)
                 pressed = await elem.get_attribute("aria-pressed")
-                if pressed == "false":
+                label = (await elem.get_attribute("aria-label") or "").lower()
+                # aria-pressed="false" means mic is ON (not yet muted) — click to mute
+                if pressed == "false" or "unmute" in label:
                     await elem.click()
                     logger.info("Muted microphone")
-                return
+                else:
+                    logger.info("Microphone already muted")
+                break
             except Exception:
                 continue
 
-        # Disable camera
-        cam_selectors = ["[data-tid='toggle-video']", "button[aria-label*='Camera' i]"]
+        await asyncio.sleep(0.5)
+
+        # --- Turn off camera --- (independent of mic, no early return above)
+        cam_selectors = [
+            "[data-tid='toggle-video']",
+            "button[aria-label*='Camera' i]",
+            "button[aria-label*='Video' i]",
+            "button[aria-label*='Stop video' i]",
+        ]
         for sel in cam_selectors:
             try:
-                elem = await self._page.wait_for_selector(sel, timeout=4000)
+                elem = await self._page.wait_for_selector(sel, timeout=5000)
                 pressed = await elem.get_attribute("aria-pressed")
-                if pressed == "true":
+                label = (await elem.get_attribute("aria-label") or "").lower()
+                # aria-pressed="true" means camera is ON — click to turn off
+                if pressed == "true" or "stop video" in label or "turn off" in label:
                     await elem.click()
                     logger.info("Turned off camera")
-                return
+                else:
+                    logger.info("Camera already off")
+                break
             except Exception:
                 continue
 
