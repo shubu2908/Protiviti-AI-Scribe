@@ -128,13 +128,15 @@ class BotverseTeamsBot:
                 pass
 
         finally:
-            # Always clean up, even on error
+            # Stop recording and leave — keep browser open so we can post to chat
             self.audio.stop()
             await self.browser.leave_meeting()
-            await self.browser.close()
 
-        # 8. Generate outputs
-        await self._generate_outputs(meeting_title, self._participants, self._organizer)
+        # 8. Generate outputs (MoM, transcript, Teams chat post)
+        try:
+            await self._generate_outputs(meeting_title, self._participants, self._organizer)
+        finally:
+            await self.browser.close()
 
     # ------------------------------------------------------------------
     # Output generation
@@ -180,6 +182,14 @@ class BotverseTeamsBot:
                 sent = sender.send_mom(mom_text, mom_path, meeting_title, participants)
                 email_status = ", ".join(recipients_set) if sent else "failed (check log)"
 
+        # Post to Teams meeting chat
+        chat_status = ""
+        if mom_text:
+            from mom_generator import MoMGenerator
+            chat_msg = MoMGenerator.format_for_teams_chat(mom_text, meeting_title)
+            posted = await self.browser.post_to_meeting_chat(chat_msg)
+            chat_status = "posted" if posted else "failed (check log)"
+
         # --- Summary printout ---
         print("\n" + "=" * 60)
         print("SESSION COMPLETE")
@@ -187,6 +197,8 @@ class BotverseTeamsBot:
         print(f"  Output folder : {self.output_dir}")
         print(f"  Transcript    : {transcript_path}")
         print(f"  Minutes (MoM) : {mom_path}")
+        if chat_status:
+            print(f"  Teams chat    : {chat_status}")
         if email_status:
             print(f"  Email sent to : {email_status}")
         print("=" * 60)

@@ -348,6 +348,60 @@ class TeamsBrowserBot:
     # Utilities
     # ------------------------------------------------------------------
 
+    async def post_to_meeting_chat(self, message: str) -> bool:
+        """Post a message to the Teams meeting chat. Returns True on success."""
+        if not self._page:
+            return False
+
+        # Open the chat panel
+        chat_btn_selectors = [
+            "button[aria-label*='Chat' i]",
+            "[data-tid='chat-button']",
+            "[data-tid='callingButtons-showChatButton']",
+            "button:has-text('Chat')",
+        ]
+        for sel in chat_btn_selectors:
+            try:
+                await self._page.click(sel, timeout=4000)
+                await asyncio.sleep(2)
+                logger.info("Chat panel opened via: %s", sel)
+                break
+            except Exception:
+                continue
+
+        # Find the message input box
+        input_selectors = [
+            "div[contenteditable='true'][aria-label*='message' i]",
+            "div[contenteditable='true'][role='textbox']",
+            "[data-tid='messageInputField']",
+            "div[class*='ql-editor']",
+        ]
+        for sel in input_selectors:
+            try:
+                box = await self._page.wait_for_selector(sel, timeout=5000)
+                await box.click()
+                await asyncio.sleep(0.5)
+
+                # Use clipboard to paste multi-line text (avoids Enter-sends-message issue)
+                import json
+                await self._page.evaluate(
+                    f"navigator.clipboard.writeText({json.dumps(message)})"
+                )
+                await self._page.keyboard.press("Control+v")
+                await asyncio.sleep(1)
+
+                # Send with Ctrl+Enter (works in Teams web regardless of Enter key setting)
+                await self._page.keyboard.press("Control+Enter")
+                await asyncio.sleep(1)
+                logger.info("MoM posted to Teams meeting chat (%d chars)", len(message))
+                return True
+            except Exception as exc:
+                logger.warning("Chat input %s failed: %s", sel, exc)
+                continue
+
+        logger.error("Could not post MoM to Teams chat — no input box found")
+        return False
+
     async def screenshot(self, path: str = "debug.png") -> None:
         try:
             await self._page.screenshot(path=path)
