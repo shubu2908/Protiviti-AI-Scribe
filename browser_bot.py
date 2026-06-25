@@ -13,8 +13,8 @@ SESSION_FILE = "teams_session.json"
 
 _LAUNCH_ARGS = [
     "--use-fake-ui-for-media-stream",       # auto-accept mic/camera permission dialogs
-    # --use-fake-device-for-media-stream intentionally REMOVED:
-    # it generates a constant fake audio tone that Teams sends to participants causing a beep.
+    "--use-fake-device-for-media-stream",   # use silent fake mic/camera so Chrome never grabs the real mic
+                                            # (without this Windows routes the real mic to speakers = echo)
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -163,53 +163,70 @@ class TeamsBrowserBot:
         logger.warning("Could not find name-input field; joining without entering name")
 
     async def _ensure_av_off(self) -> None:
-        """Mute mic AND turn off camera independently before joining."""
-        await asyncio.sleep(1)
+        """Guarantee mic is muted and camera is off before joining. Tries all known selectors."""
+        await asyncio.sleep(2)  # Let pre-join controls render fully
 
         # --- Mute microphone ---
         mic_selectors = [
             "[data-tid='toggle-mute']",
             "button[aria-label*='Mute' i]",
             "button[aria-label*='Microphone' i]",
+            "button[title*='Mute' i]",
+            "button[title*='Microphone' i]",
         ]
+        mic_done = False
         for sel in mic_selectors:
             try:
                 elem = await self._page.wait_for_selector(sel, timeout=5000)
                 pressed = await elem.get_attribute("aria-pressed")
                 label = (await elem.get_attribute("aria-label") or "").lower()
-                # aria-pressed="false" means mic is ON (not yet muted) — click to mute
-                if pressed == "false" or "unmute" in label:
+                # pressed="false" → mic is ON → click to mute
+                # "unmute" in label → mic is already muted (button says "click to unmute") → skip
+                if pressed == "false" and "unmute" not in label:
                     await elem.click()
-                    logger.info("Muted microphone")
+                    await asyncio.sleep(0.3)
+                    logger.info("Microphone muted")
                 else:
-                    logger.info("Microphone already muted")
+                    logger.info("Microphone already off")
+                mic_done = True
                 break
             except Exception:
                 continue
+        if not mic_done:
+            logger.warning("Could not find mic toggle — bot may join with mic active")
 
         await asyncio.sleep(0.5)
 
-        # --- Turn off camera --- (independent of mic, no early return above)
+        # --- Turn off camera ---
         cam_selectors = [
             "[data-tid='toggle-video']",
             "button[aria-label*='Camera' i]",
             "button[aria-label*='Video' i]",
             "button[aria-label*='Stop video' i]",
+            "button[aria-label*='Turn off camera' i]",
+            "button[title*='Camera' i]",
+            "button[title*='Video' i]",
         ]
+        cam_done = False
         for sel in cam_selectors:
             try:
                 elem = await self._page.wait_for_selector(sel, timeout=5000)
                 pressed = await elem.get_attribute("aria-pressed")
                 label = (await elem.get_attribute("aria-label") or "").lower()
-                # aria-pressed="true" means camera is ON — click to turn off
-                if pressed == "true" or "stop video" in label or "turn off" in label:
+                # pressed="true" → camera is ON → click to turn off
+                # "turn on" in label → camera is already off → skip
+                if pressed == "true" and "turn on" not in label:
                     await elem.click()
-                    logger.info("Turned off camera")
+                    await asyncio.sleep(0.3)
+                    logger.info("Camera turned off")
                 else:
                     logger.info("Camera already off")
+                cam_done = True
                 break
             except Exception:
                 continue
+        if not cam_done:
+            logger.warning("Could not find camera toggle — bot may join with camera active")
 
     async def _click_join(self) -> None:
         selectors = [
