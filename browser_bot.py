@@ -38,6 +38,7 @@ class TeamsBrowserBot:
     def __init__(self) -> None:
         self.display_name: str = BOT_DISPLAY_NAME
         self.is_in_meeting: bool = False
+        self._already_disconnected: bool = False  # True if kicked to lobby (Rejoin/Join now)
         self._playwright = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -336,6 +337,10 @@ class TeamsBrowserBot:
             "text=Return to home",
             "text=Go back",
         ]
+        # Selectors that mean we're back at the lobby/pre-join screen — there's nothing
+        # to "leave" anymore, so leave_meeting() should skip straight to closing.
+        lobby_selectors = {"button:has-text('Rejoin')", "button:has-text('Join now')"}
+
         meeting_url_fragment = self._page.url
         logger.info("Watching for meeting-end signals (poll every %ds)…", poll_interval)
         while True:
@@ -345,6 +350,8 @@ class TeamsBrowserBot:
                     await self._page.wait_for_selector(sel, timeout=poll_interval * 1000)
                     logger.info("Meeting-end detected via selector: %s", sel)
                     self.is_in_meeting = False
+                    if sel in lobby_selectors:
+                        self._already_disconnected = True
                     return
                 except Exception:
                     continue
@@ -367,6 +374,13 @@ class TeamsBrowserBot:
             await asyncio.sleep(poll_interval)
 
     async def leave_meeting(self) -> None:
+        if self._already_disconnected:
+            # Already kicked back to the lobby (Rejoin/Join now) — nothing to click,
+            # skip straight to closing instead of wasting ~10s on dead selectors.
+            logger.info("Already disconnected from meeting — skipping leave-button click")
+            self.is_in_meeting = False
+            return
+
         leave_selectors = [
             "[data-tid='hangup-main-btn']",
             "button[aria-label*='Leave' i]",
