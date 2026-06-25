@@ -171,86 +171,89 @@ class TeamsBrowserBot:
         logger.warning("Could not find name-input field; joining without entering name")
 
     async def _ensure_av_off(self) -> None:
-        """Guarantee mic is muted and camera is off before joining. Tries all known selectors."""
-        await asyncio.sleep(2)  # Let pre-join controls render fully
+        """Turn off mic and camera on the Teams light-meetings pre-join page."""
+        await asyncio.sleep(2)
 
-        # --- Mute microphone ---
-        mic_selectors = [
-            "[data-tid='toggle-mute']",
-            "button[aria-label*='Mute' i]",
-            "button[aria-label*='Microphone' i]",
-            "button[title*='Mute' i]",
-            "button[title*='Microphone' i]",
-        ]
-        mic_done = False
-        for sel in mic_selectors:
+        # ── Audio off ────────────────────────────────────────────────────────
+        # The light-meetings pre-join shows "Don't use audio" as a radio option.
+        # Selecting it is cleaner than toggling the mic switch.
+        audio_off_done = False
+        for sel in [
+            "text=Don't use audio",
+            "label:has-text(\"Don't use audio\")",
+            "[aria-label*=\"Don't use audio\" i]",
+        ]:
             try:
-                elem = await self._page.wait_for_selector(sel, timeout=5000)
-                pressed = await elem.get_attribute("aria-pressed")
-                label = (await elem.get_attribute("aria-label") or "").lower()
-                # pressed="false" → mic is ON → click to mute
-                # "unmute" in label → mic is already muted (button says "click to unmute") → skip
-                if pressed == "false" and "unmute" not in label:
-                    await elem.click()
-                    await asyncio.sleep(0.3)
-                    logger.info("Microphone muted")
-                else:
-                    logger.info("Microphone already off")
-                mic_done = True
+                await self._page.click(sel, timeout=4000)
+                logger.info("Selected 'Don't use audio'")
+                audio_off_done = True
                 break
             except Exception:
                 continue
-        if not mic_done:
-            logger.warning("Could not find mic toggle — bot may join with mic active")
+
+        # Fallback: turn off the mic toggle switch (aria-checked="true" → click)
+        if not audio_off_done:
+            try:
+                switches = await self._page.query_selector_all("[role='switch'][aria-checked='true']")
+                for sw in switches:
+                    label = (await sw.get_attribute("aria-label") or "").lower()
+                    if any(k in label for k in ["audio", "mic", "microphone"]):
+                        await sw.click()
+                        logger.info("Mic switch turned off: %s", label)
+                        audio_off_done = True
+                        break
+            except Exception as exc:
+                logger.warning("Mic switch scan failed: %s", exc)
+
+        # Legacy toggle buttons (traditional pre-join page)
+        if not audio_off_done:
+            for sel in ["[data-tid='toggle-mute']", "button[aria-label*='Mute' i]"]:
+                try:
+                    elem = await self._page.wait_for_selector(sel, timeout=3000)
+                    if await elem.get_attribute("aria-pressed") == "false":
+                        await elem.click()
+                        logger.info("Microphone muted (legacy)")
+                    break
+                except Exception:
+                    continue
 
         await asyncio.sleep(0.5)
 
-        # --- Turn off camera ---
-        cam_selectors = [
-            "[data-tid='toggle-video']",
-            "button[aria-label*='Camera' i]",
-            "button[aria-label*='Video' i]",
-            "button[aria-label*='Stop video' i]",
-            "button[aria-label*='Turn off camera' i]",
-            "button[title*='Camera' i]",
-            "button[title*='Video' i]",
-        ]
+        # ── Camera off ───────────────────────────────────────────────────────
+        # On the light-meetings page the camera is a role='switch' with aria-checked='true'
         cam_done = False
-        for sel in cam_selectors:
-            try:
-                elem = await self._page.wait_for_selector(sel, timeout=5000)
-                pressed = await elem.get_attribute("aria-pressed")
-                label = (await elem.get_attribute("aria-label") or "").lower()
-                # pressed="true" → camera is ON → click to turn off
-                # "turn on" in label → camera is already off → skip
-                if pressed == "true" and "turn on" not in label:
-                    await elem.click()
+        try:
+            switches = await self._page.query_selector_all("[role='switch'][aria-checked='true']")
+            for sw in switches:
+                label = (await sw.get_attribute("aria-label") or "").lower()
+                if any(k in label for k in ["camera", "video"]):
+                    await sw.click()
                     await asyncio.sleep(0.3)
-                    logger.info("Camera turned off")
-                else:
-                    logger.info("Camera already off")
+                    logger.info("Camera switch turned off: %s", label)
+                    cam_done = True
+                    break
+            # If no label matched, try the first active switch near the video area
+            if not cam_done and switches:
+                await switches[0].click()
+                await asyncio.sleep(0.3)
+                logger.info("Camera switch turned off (first active switch)")
                 cam_done = True
-                break
-            except Exception:
-                continue
+        except Exception as exc:
+            logger.warning("Camera switch approach failed: %s", exc)
 
-        # Last resort: scan all buttons for any camera/video related one that appears active
+        # Legacy camera toggle buttons
         if not cam_done:
-            try:
-                all_buttons = await self._page.query_selector_all("button")
-                for btn in all_buttons:
-                    label = (await btn.get_attribute("aria-label") or "").lower()
-                    pressed = await btn.get_attribute("aria-pressed")
-                    if any(k in label for k in ["camera", "video"]):
-                        logger.info("Found camera button via scan: label='%s' pressed='%s'", label, pressed)
-                        if pressed == "true":
-                            await btn.click()
-                            await asyncio.sleep(0.3)
-                            logger.info("Camera turned off via button scan")
-                            cam_done = True
-                            break
-            except Exception as exc:
-                logger.warning("Button scan failed: %s", exc)
+            for sel in ["[data-tid='toggle-video']", "button[aria-label*='Camera' i]",
+                        "button[aria-label*='Video' i]"]:
+                try:
+                    elem = await self._page.wait_for_selector(sel, timeout=3000)
+                    if await elem.get_attribute("aria-pressed") == "true":
+                        await elem.click()
+                        logger.info("Camera turned off (legacy)")
+                    cam_done = True
+                    break
+                except Exception:
+                    continue
 
         if not cam_done:
             await self.screenshot("debug_camera.png")
@@ -374,7 +377,6 @@ class TeamsBrowserBot:
             try:
                 current_url = self._page.url
                 if current_url and meeting_url_fragment:
-                    # If we've been redirected away from the meeting page entirely
                     in_meeting_url = any(kw in current_url for kw in [
                         "meet/", "meetup-join", "light-meetings/launch", "light-meetings/meeting"
                     ])
@@ -386,6 +388,9 @@ class TeamsBrowserBot:
                 pass
 
             await asyncio.sleep(poll_interval)
+
+        # Save a screenshot of the post-meeting page (helps debug chat posting)
+        await self.screenshot("debug_meeting_end.png")
 
     async def leave_meeting(self) -> None:
         leave_selectors = [
