@@ -102,8 +102,13 @@ class TeamsBrowserBot:
     async def join_as_guest(self, meeting_url: str) -> None:
         await self._page.goto(meeting_url)
         await self._dismiss_app_dialog()
+        # Give the pre-join page time to fully render before interacting
+        await asyncio.sleep(4)
+        await self.screenshot("debug_prejoin.png")  # saved for selector debugging
         await self._enter_guest_name()
         await self._ensure_av_off()
+        # Brief pause so user can see the pre-join state before bot clicks Join
+        await asyncio.sleep(3)
         await self._click_join()
         await asyncio.sleep(6)
         self.is_in_meeting = True
@@ -146,8 +151,11 @@ class TeamsBrowserBot:
         selectors = [
             "[data-tid='prejoin-display-name-input']",
             "input[placeholder*='name' i]",
+            "input[placeholder*='Enter' i]",
             "input[aria-label*='name' i]",
+            "input[aria-label*='your name' i]",
             "#username-input",
+            "[data-tid='anonymous-join-name-input']",
             "input[type='text']",
         ]
         for sel in selectors:
@@ -225,8 +233,28 @@ class TeamsBrowserBot:
                 break
             except Exception:
                 continue
+
+        # Last resort: scan all buttons for any camera/video related one that appears active
         if not cam_done:
-            logger.warning("Could not find camera toggle — bot may join with camera active")
+            try:
+                all_buttons = await self._page.query_selector_all("button")
+                for btn in all_buttons:
+                    label = (await btn.get_attribute("aria-label") or "").lower()
+                    pressed = await btn.get_attribute("aria-pressed")
+                    if any(k in label for k in ["camera", "video"]):
+                        logger.info("Found camera button via scan: label='%s' pressed='%s'", label, pressed)
+                        if pressed == "true":
+                            await btn.click()
+                            await asyncio.sleep(0.3)
+                            logger.info("Camera turned off via button scan")
+                            cam_done = True
+                            break
+            except Exception as exc:
+                logger.warning("Button scan failed: %s", exc)
+
+        if not cam_done:
+            await self.screenshot("debug_camera.png")
+            logger.warning("Could not find camera toggle — check debug_camera.png")
 
     async def _click_join(self) -> None:
         selectors = [
