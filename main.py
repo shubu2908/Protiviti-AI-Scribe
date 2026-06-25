@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from config import GEMINI_API_KEY, MAX_MEETING_DURATION, OUTPUT_DIR
+from config import GEMINI_API_KEY, MAX_MEETING_DURATION, OUTPUT_DIR, EMAIL_TO
 from audio_capture import AudioCapture
 from browser_bot import TeamsBrowserBot
 from mom_generator import MoMGenerator
@@ -152,6 +152,14 @@ class BotverseTeamsBot:
         mom_text = self.mom_gen.generate(transcript, meeting_title, participants)
         self.mom_gen.save(mom_text, mom_path)
 
+        # Email the MoM if SMTP is configured
+        email_status = ""
+        if EMAIL_TO:
+            from email_sender import EmailSender
+            sender = EmailSender()
+            sent = sender.send_mom(mom_text, mom_path, meeting_title, participants)
+            email_status = EMAIL_TO if sent else "failed (check log)"
+
         # --- Summary printout ---
         print("\n" + "=" * 60)
         print("SESSION COMPLETE")
@@ -159,6 +167,8 @@ class BotverseTeamsBot:
         print(f"  Output folder : {self.output_dir}")
         print(f"  Transcript    : {transcript_path}")
         print(f"  Minutes (MoM) : {mom_path}")
+        if email_status:
+            print(f"  Email sent to : {email_status}")
         print("=" * 60)
         if mom_text:
             preview = mom_text[:800]

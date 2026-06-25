@@ -36,17 +36,28 @@ class AudioCapture:
 
     def _get_loopback(self) -> sc.core.Microphone:
         """Return the first available WASAPI loopback device."""
+        # Preferred: default speaker's loopback via include_loopback
         try:
             speaker = sc.default_speaker()
-            loopback = speaker.loopback_audio
+            loopback = sc.get_microphone(speaker.id, include_loopback=True)
             logger.info("Using default speaker loopback: %s", speaker.name)
             return loopback
         except Exception as exc:
-            logger.warning("Default speaker loopback failed (%s), scanning all speakers…", exc)
+            logger.warning("Default speaker loopback failed (%s), scanning all loopback mics…", exc)
 
+        # Fallback: any loopback microphone in the system
+        try:
+            loopbacks = [m for m in sc.all_microphones(include_loopback=True) if m.isloopback]
+            if loopbacks:
+                logger.info("Using loopback device: %s", loopbacks[0].name)
+                return loopbacks[0]
+        except Exception as exc:
+            logger.warning("Loopback mic scan failed (%s), trying all speakers…", exc)
+
+        # Last resort: iterate speakers and try get_microphone by id
         for speaker in sc.all_speakers():
             try:
-                loopback = speaker.loopback_audio
+                loopback = sc.get_microphone(speaker.id, include_loopback=True)
                 logger.info("Using loopback from speaker: %s", speaker.name)
                 return loopback
             except Exception:
