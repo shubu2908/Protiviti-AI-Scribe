@@ -17,6 +17,10 @@ SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
 EMAIL_FROM: str = os.getenv("EMAIL_FROM", "") or os.getenv("SMTP_USER", "")
 EMAIL_TO: str = os.getenv("EMAIL_TO", "")          # comma-separated recipients
 ORGANIZER_EMAIL: str = os.getenv("ORGANIZER_EMAIL", "")  # auto-added to every MoM email
+
+# Microsoft Graph API — posts the MoM directly into the Teams meeting chat (no browser)
+GRAPH_CLIENT_ID: str = os.getenv("GRAPH_CLIENT_ID", "")
+GRAPH_TENANT_ID: str = os.getenv("GRAPH_TENANT_ID", "")
 AUDIO_CHUNK_DURATION = 60          # seconds per recorded chunk
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1

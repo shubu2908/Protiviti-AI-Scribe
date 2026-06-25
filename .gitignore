@@ -3,6 +3,7 @@
 
 # Session cookies
 teams_session.json
+graph_token_cache.bin
 
 # Meeting output (audio chunks + transcripts)
 meeting_output/

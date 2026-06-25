@@ -128,23 +128,20 @@ class ProtivitiTeamsBot:
                 pass
 
         finally:
-            # Stop recording first
+            # Stop recording, leave, and close — chat posting uses Graph API, not the browser
             self.audio.stop()
-            # Generate outputs BEFORE leaving so we can post to Teams chat
-            # while the browser is still inside the meeting room
-            try:
-                await self._generate_outputs(meeting_title, self._participants, self._organizer)
-            except Exception as exc:
-                logger.error("Output generation error: %s", exc)
-            # Now leave and close
             await self.browser.leave_meeting()
             await self.browser.close()
+
+        await self._generate_outputs(meeting_title, self._participants, self._organizer, meeting_url)
 
     # ------------------------------------------------------------------
     # Output generation
     # ------------------------------------------------------------------
 
-    async def _generate_outputs(self, meeting_title: str, participants: list[str], organizer: str = "") -> None:
+    async def _generate_outputs(
+        self, meeting_title: str, participants: list[str], organizer: str = "", meeting_url: str = ""
+    ) -> None:
         transcript = self.transcriber.get_full_transcript()
         transcript_path = str(self.output_dir / "transcript.txt")
 
@@ -184,13 +181,16 @@ class ProtivitiTeamsBot:
                 sent = sender.send_mom(mom_text, mom_path, meeting_title, participants)
                 email_status = ", ".join(recipients_set) if sent else "failed (check log)"
 
-        # Post to Teams meeting chat
+        # Post to Teams meeting chat via Microsoft Graph API (no browser involved)
         chat_status = ""
-        if mom_text:
+        if mom_text and meeting_url:
+            from graph_client import GraphChatPoster
             from mom_generator import MoMGenerator
-            chat_msg = MoMGenerator.format_for_teams_chat(mom_text, meeting_title)
-            posted = await self.browser.post_to_meeting_chat(chat_msg)
-            chat_status = "posted" if posted else "failed (check log)"
+            poster = GraphChatPoster()
+            if poster.configured:
+                chat_html = MoMGenerator.format_for_teams_chat_html(mom_text, meeting_title)
+                posted = poster.post_mom(meeting_url, chat_html)
+                chat_status = "posted" if posted else "failed (check log)"
 
         # --- Summary printout ---
         print("\n" + "=" * 60)
