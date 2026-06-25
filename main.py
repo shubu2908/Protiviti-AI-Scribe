@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
-class BotverseTeamsBot:
+class ProtivitiTeamsBot:
     def __init__(self) -> None:
         if not GEMINI_API_KEY:
             print(
@@ -266,7 +266,7 @@ Quick-start examples:
 
     args = parser.parse_args()
 
-    bot = BotverseTeamsBot()
+    bot = ProtivitiTeamsBot()
 
     if args.save_session:
         bot.save_session_flow()

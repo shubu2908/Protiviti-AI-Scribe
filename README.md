@@ -41,7 +41,7 @@ copy .env.example .env
 python main.py --url "https://teams.microsoft.com/l/meetup-join/..."
 ```
 
-The bot joins as **"Botverse AI Scribe"** (or whatever you set in `.env`), with microphone
+The bot joins as **"Protiviti AI Scribe"** (or whatever you set in `.env`), with microphone
 and camera off.  Override the display name in `.env` (`BOT_DISPLAY_NAME=My Scribe`).
 
 ### Option B — Join with your saved Teams account session
@@ -159,7 +159,7 @@ A 1-hour meeting uses roughly 62 Gemini calls, well within all free-tier limits.
 ## Architecture
 
 ```
-main.py (BotverseTeamsBot)
+main.py (ProtivitiTeamsBot)
 ├── browser_bot.py  (TeamsBrowserBot)   — Playwright/Chromium automation
 ├── audio_capture.py (AudioCapture)     — WASAPI loopback recording thread
 ├── transcriber.py  (Transcriber)       — per-chunk Gemini transcription

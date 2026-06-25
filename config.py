@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-BOT_DISPLAY_NAME: str = os.getenv("BOT_DISPLAY_NAME", "Botverse AI Scribe")
+BOT_DISPLAY_NAME: str = os.getenv("BOT_DISPLAY_NAME", "Protiviti AI Scribe")
 
 GEMINI_MODEL = "gemini-2.5-flash"
 
