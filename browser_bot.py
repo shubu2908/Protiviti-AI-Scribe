@@ -17,7 +17,11 @@ _LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
     "--disable-dev-shm-usage",
-    "--mute-audio",
+    # NOTE: --mute-audio is intentionally removed.
+    # WASAPI loopback records what Windows plays through speakers.
+    # The bot's Chrome must be allowed to play Teams audio so the
+    # loopback can capture it. Set your speaker volume to a normal
+    # level before starting a session.
     "--disable-infobars",
     "--disable-extensions",
     "--disable-popup-blocking",
@@ -254,11 +258,21 @@ class TeamsBrowserBot:
             "text=The meeting has ended",
             "text=Meeting ended",
             "text=This meeting has ended",
+            "text=This call has ended",
+            "text=Call ended",
             "[data-tid='meeting-ended-banner']",
+            "[data-tid='call-ended-banner']",
             "text=You left the meeting",
+            "text=You've left the meeting",
+            # Light meeting (meet/ URLs) — shows Rejoin when host ends
+            "button:has-text('Rejoin')",
+            "text=Return to home",
+            "text=Go back",
         ]
+        meeting_url_fragment = self._page.url
         logger.info("Watching for meeting-end signals (poll every %ds)…", poll_interval)
         while True:
+            # Check text/element selectors
             for sel in end_selectors:
                 try:
                     await self._page.wait_for_selector(sel, timeout=poll_interval * 1000)
@@ -267,6 +281,23 @@ class TeamsBrowserBot:
                     return
                 except Exception:
                     continue
+
+            # Check if page navigated away from the meeting (URL changed significantly)
+            try:
+                current_url = self._page.url
+                if current_url and meeting_url_fragment:
+                    # If we've been redirected away from the meeting page entirely
+                    in_meeting_url = any(kw in current_url for kw in [
+                        "meet/", "meetup-join", "light-meetings/launch", "light-meetings/meeting"
+                    ])
+                    if not in_meeting_url and "teams.microsoft.com" in current_url:
+                        logger.info("Meeting-end detected via URL change: %s", current_url)
+                        self.is_in_meeting = False
+                        return
+            except Exception:
+                pass
+
+            await asyncio.sleep(poll_interval)
 
     async def leave_meeting(self) -> None:
         leave_selectors = [
