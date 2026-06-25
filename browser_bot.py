@@ -375,10 +375,11 @@ class TeamsBrowserBot:
             "div[contenteditable='true'][role='textbox']",
             "[data-tid='messageInputField']",
             "div[class*='ql-editor']",
+            "div[contenteditable='true']",
         ]
         for sel in input_selectors:
             try:
-                box = await self._page.wait_for_selector(sel, timeout=5000)
+                box = await self._page.wait_for_selector(sel, timeout=8000)
                 await box.click()
                 await asyncio.sleep(0.5)
 
@@ -400,6 +401,7 @@ class TeamsBrowserBot:
                 continue
 
         logger.error("Could not post MoM to Teams chat — no input box found")
+        await self.screenshot("debug_chat.png")
         return False
 
     async def screenshot(self, path: str = "debug.png") -> None:

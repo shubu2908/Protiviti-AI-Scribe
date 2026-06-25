@@ -128,14 +128,16 @@ class BotverseTeamsBot:
                 pass
 
         finally:
-            # Stop recording and leave — keep browser open so we can post to chat
+            # Stop recording first
             self.audio.stop()
+            # Generate outputs BEFORE leaving so we can post to Teams chat
+            # while the browser is still inside the meeting room
+            try:
+                await self._generate_outputs(meeting_title, self._participants, self._organizer)
+            except Exception as exc:
+                logger.error("Output generation error: %s", exc)
+            # Now leave and close
             await self.browser.leave_meeting()
-
-        # 8. Generate outputs (MoM, transcript, Teams chat post)
-        try:
-            await self._generate_outputs(meeting_title, self._participants, self._organizer)
-        finally:
             await self.browser.close()
 
     # ------------------------------------------------------------------
