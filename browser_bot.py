@@ -12,9 +12,8 @@ logger = logging.getLogger(__name__)
 SESSION_FILE = "teams_session.json"
 
 _LAUNCH_ARGS = [
-    "--use-fake-ui-for-media-stream",       # auto-accept mic/camera permission dialogs
-    "--use-fake-device-for-media-stream",   # use silent fake mic/camera so Chrome never grabs the real mic
-                                            # (without this Windows routes the real mic to speakers = echo)
+    "--use-fake-ui-for-media-stream",
+    "--use-fake-device-for-media-stream",
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -102,13 +101,8 @@ class TeamsBrowserBot:
     async def join_as_guest(self, meeting_url: str) -> None:
         await self._page.goto(meeting_url)
         await self._dismiss_app_dialog()
-        # Give the pre-join page time to fully render before interacting
-        await asyncio.sleep(4)
-        await self.screenshot("debug_prejoin.png")  # saved for selector debugging
         await self._enter_guest_name()
         await self._ensure_av_off()
-        # Brief pause so user can see the pre-join state before bot clicks Join
-        await asyncio.sleep(3)
         await self._click_join()
         await asyncio.sleep(6)
         self.is_in_meeting = True
@@ -146,102 +140,85 @@ class TeamsBrowserBot:
         logger.debug("No app-download dialog found (may already be on web client)")
 
     async def _enter_guest_name(self) -> None:
-        # Wait for the pre-join page to fully render before looking for the name field
-        await asyncio.sleep(3)
+        await asyncio.sleep(3)  # let pre-join page fully render
         selectors = [
             "[data-tid='prejoin-display-name-input']",
+            "[data-tid='anonymous-join-name-input']",
             "input[placeholder*='name' i]",
             "input[placeholder*='Enter' i]",
             "input[aria-label*='name' i]",
-            "input[aria-label*='your name' i]",
             "#username-input",
-            "[data-tid='anonymous-join-name-input']",
             "input[type='text']",
         ]
         for sel in selectors:
             try:
-                await self._page.wait_for_selector(sel, timeout=15000)
+                await self._page.wait_for_selector(sel, timeout=12000)
                 await self._page.triple_click(sel)
                 await self._page.fill(sel, self.display_name)
-                await asyncio.sleep(0.5)
-                logger.info("Entered guest name '%s' via selector: %s", self.display_name, sel)
+                logger.info("Entered guest name '%s'", self.display_name)
                 return
             except Exception:
                 continue
         logger.warning("Could not find name-input field; joining without entering name")
 
     async def _ensure_av_off(self) -> None:
-        """Turn off mic and camera on the Teams light-meetings pre-join page."""
+        """Mute mic and turn off camera. Works on both Teams light-meetings and classic pre-join."""
         await asyncio.sleep(2)
 
-        # ── Audio off ────────────────────────────────────────────────────────
-        # The light-meetings pre-join shows "Don't use audio" as a radio option.
-        # Selecting it is cleaner than toggling the mic switch.
-        audio_off_done = False
-        for sel in [
-            "text=Don't use audio",
-            "label:has-text(\"Don't use audio\")",
-            "[aria-label*=\"Don't use audio\" i]",
-        ]:
+        # ── Microphone off ───────────────────────────────────────────────
+        # Light-meetings page: click "Don't use audio" radio option
+        mic_done = False
+        for sel in ["text=Don't use audio", "label:has-text(\"Don't use audio\")"]:
             try:
-                await self._page.click(sel, timeout=4000)
-                logger.info("Selected 'Don't use audio'")
-                audio_off_done = True
+                await self._page.click(sel, timeout=3000)
+                logger.info("Audio disabled ('Don't use audio')")
+                mic_done = True
                 break
             except Exception:
                 continue
 
-        # Fallback: turn off the mic toggle switch (aria-checked="true" → click)
-        if not audio_off_done:
+        # Fallback: toggle switches with role=switch (light-meetings page)
+        if not mic_done:
             try:
-                switches = await self._page.query_selector_all("[role='switch'][aria-checked='true']")
-                for sw in switches:
+                for sw in await self._page.query_selector_all("[role='switch'][aria-checked='true']"):
                     label = (await sw.get_attribute("aria-label") or "").lower()
-                    if any(k in label for k in ["audio", "mic", "microphone"]):
+                    if any(k in label for k in ["mic", "audio", "microphone"]):
                         await sw.click()
-                        logger.info("Mic switch turned off: %s", label)
-                        audio_off_done = True
+                        logger.info("Mic switch turned off")
+                        mic_done = True
                         break
-            except Exception as exc:
-                logger.warning("Mic switch scan failed: %s", exc)
+            except Exception:
+                pass
 
-        # Legacy toggle buttons (traditional pre-join page)
-        if not audio_off_done:
+        # Fallback: classic pre-join toggle buttons
+        if not mic_done:
             for sel in ["[data-tid='toggle-mute']", "button[aria-label*='Mute' i]"]:
                 try:
                     elem = await self._page.wait_for_selector(sel, timeout=3000)
                     if await elem.get_attribute("aria-pressed") == "false":
                         await elem.click()
-                        logger.info("Microphone muted (legacy)")
+                        logger.info("Microphone muted")
                     break
                 except Exception:
                     continue
 
         await asyncio.sleep(0.5)
 
-        # ── Camera off ───────────────────────────────────────────────────────
-        # On the light-meetings page the camera is a role='switch' with aria-checked='true'
+        # ── Camera off ───────────────────────────────────────────────────
+        # Light-meetings page: role=switch toggles
         cam_done = False
         try:
-            switches = await self._page.query_selector_all("[role='switch'][aria-checked='true']")
-            for sw in switches:
+            for sw in await self._page.query_selector_all("[role='switch'][aria-checked='true']"):
                 label = (await sw.get_attribute("aria-label") or "").lower()
                 if any(k in label for k in ["camera", "video"]):
                     await sw.click()
-                    await asyncio.sleep(0.3)
-                    logger.info("Camera switch turned off: %s", label)
+                    logger.info("Camera turned off")
                     cam_done = True
                     break
-            # If no label matched, try the first active switch near the video area
-            if not cam_done and switches:
-                await switches[0].click()
-                await asyncio.sleep(0.3)
-                logger.info("Camera switch turned off (first active switch)")
-                cam_done = True
-        except Exception as exc:
-            logger.warning("Camera switch approach failed: %s", exc)
+        except Exception:
+            pass
 
-        # Legacy camera toggle buttons
+        # Fallback: classic pre-join toggle buttons
         if not cam_done:
             for sel in ["[data-tid='toggle-video']", "button[aria-label*='Camera' i]",
                         "button[aria-label*='Video' i]"]:
@@ -250,14 +227,9 @@ class TeamsBrowserBot:
                     if await elem.get_attribute("aria-pressed") == "true":
                         await elem.click()
                         logger.info("Camera turned off (legacy)")
-                    cam_done = True
                     break
                 except Exception:
                     continue
-
-        if not cam_done:
-            await self.screenshot("debug_camera.png")
-            logger.warning("Could not find camera toggle — check debug_camera.png")
 
     async def _click_join(self) -> None:
         selectors = [
@@ -377,6 +349,7 @@ class TeamsBrowserBot:
             try:
                 current_url = self._page.url
                 if current_url and meeting_url_fragment:
+                    # If we've been redirected away from the meeting page entirely
                     in_meeting_url = any(kw in current_url for kw in [
                         "meet/", "meetup-join", "light-meetings/launch", "light-meetings/meeting"
                     ])
@@ -388,9 +361,6 @@ class TeamsBrowserBot:
                 pass
 
             await asyncio.sleep(poll_interval)
-
-        # Save a screenshot of the post-meeting page (helps debug chat posting)
-        await self.screenshot("debug_meeting_end.png")
 
     async def leave_meeting(self) -> None:
         leave_selectors = [
@@ -481,7 +451,59 @@ class TeamsBrowserBot:
         await self.screenshot("debug_chat.png")
         return False
 
-    async def screenshot(self, path: str = "debug.png") -> None:
+    async def post_to_meeting_chat(self, message: str) -> bool:
+        """Post a message to the Teams meeting chat. Call this before leave_meeting()."""
+        if not self._page:
+            return False
+
+        # Open the chat panel
+        for sel in [
+            "button[aria-label*='Chat' i]",
+            "[data-tid='callingButtons-showChatButton']",
+            "[data-tid='chat-button']",
+            "button:has-text('Chat')",
+        ]:
+            try:
+                await self._page.click(sel, timeout=4000)
+                await asyncio.sleep(2)
+                logger.info("Chat panel opened")
+                break
+            except Exception:
+                continue
+
+        # Find the message input and paste the message
+        for sel in [
+            "div[contenteditable='true'][aria-label*='message' i]",
+            "div[contenteditable='true'][aria-multiline='true']",
+            "div[data-lexical-editor='true']",
+            "div[contenteditable='true'][role='textbox']",
+            "div[contenteditable='true']",
+        ]:
+            try:
+                box = await self._page.wait_for_selector(sel, timeout=8000)
+                await box.click()
+                await asyncio.sleep(0.5)
+                # Use clipboard paste to handle multi-line text safely
+                import json as _json
+                await self._page.evaluate(
+                    f"navigator.clipboard.writeText({_json.dumps(message)})"
+                )
+                await self._page.keyboard.press("Control+v")
+                await asyncio.sleep(1)
+                await self._page.keyboard.press("Control+Enter")
+                await asyncio.sleep(1)
+                logger.info("MoM posted to Teams meeting chat (%d chars)", len(message))
+                return True
+            except Exception as exc:
+                logger.debug("Chat input selector '%s' failed: %s", sel, exc)
+                continue
+
+        logger.warning("Could not post MoM to Teams chat — no chat input found")
+        return False
+
+    async def screenshot(self, path: str = "debug/debug.png") -> None:
+        import os
+        os.makedirs("debug", exist_ok=True)
         try:
             await self._page.screenshot(path=path)
             logger.info("Screenshot saved: %s", path)

@@ -28,5 +28,7 @@ env/
 .idea/
 *.swp
 
-# Debug screenshots
+# Debug screenshots (stored in debug/ subfolder, not project root)
+debug/
 debug_*.png
+scribe.log
