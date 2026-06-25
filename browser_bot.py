@@ -206,7 +206,8 @@ class TeamsBrowserBot:
     # In-meeting helpers
     # ------------------------------------------------------------------
 
-    async def extract_participants(self) -> list[str]:
+    async def extract_participants(self) -> tuple[list[str], str]:
+        """Return (participant_names, organizer_name). organizer_name is '' if not found."""
         roster_selectors = [
             "button[aria-label*='Participants' i]",
             "button[aria-label*='People' i]",
@@ -235,8 +236,27 @@ class TeamsBrowserBot:
             except Exception:
                 continue
 
-        logger.info("Participants detected: %s", participants)
-        return participants
+        # Try to find the organizer (labelled "Organiser" or "Organizer" in Teams)
+        organizer = ""
+        organizer_selectors = [
+            "[class*='participantItem']:has-text('Organis')",
+            "[data-tid*='participant']:has-text('Organis')",
+        ]
+        for sel in organizer_selectors:
+            try:
+                items = await self._page.query_selector_all(sel)
+                for item in items:
+                    name_el = await item.query_selector("[data-tid*='participant-name'], [class*='participantName']")
+                    if name_el:
+                        organizer = ((await name_el.text_content()) or "").strip()
+                        break
+                if organizer:
+                    break
+            except Exception:
+                continue
+
+        logger.info("Participants: %s | Organizer: %s", participants, organizer or "unknown")
+        return participants, organizer
 
     async def keep_alive(self) -> None:
         """Periodically move the mouse to prevent the browser from going idle."""

@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from config import GEMINI_API_KEY, MAX_MEETING_DURATION, OUTPUT_DIR, EMAIL_TO
+from config import GEMINI_API_KEY, MAX_MEETING_DURATION, OUTPUT_DIR, EMAIL_TO, ORGANIZER_EMAIL
 from audio_capture import AudioCapture
 from browser_bot import TeamsBrowserBot
 from mom_generator import MoMGenerator
@@ -46,6 +46,7 @@ class BotverseTeamsBot:
         self.transcriber = Transcriber()
         self.mom_gen = MoMGenerator()
         self._participants: list[str] = []
+        self._organizer: str = ""
 
     # ------------------------------------------------------------------
     # Audio callback — called from the audio thread
@@ -94,9 +95,11 @@ class BotverseTeamsBot:
 
             # 3. Extract participants
             await asyncio.sleep(10)
-            self._participants = await self.browser.extract_participants()
+            self._participants, self._organizer = await self.browser.extract_participants()
             if self._participants:
                 logger.info("Participants: %s", ", ".join(self._participants))
+            if self._organizer:
+                logger.info("Organizer: %s", self._organizer)
 
             # 4. Start audio recording
             self.audio.start(callback=self._on_chunk)
@@ -131,13 +134,13 @@ class BotverseTeamsBot:
             await self.browser.close()
 
         # 8. Generate outputs
-        await self._generate_outputs(meeting_title, self._participants)
+        await self._generate_outputs(meeting_title, self._participants, self._organizer)
 
     # ------------------------------------------------------------------
     # Output generation
     # ------------------------------------------------------------------
 
-    async def _generate_outputs(self, meeting_title: str, participants: list[str]) -> None:
+    async def _generate_outputs(self, meeting_title: str, participants: list[str], organizer: str = "") -> None:
         transcript = self.transcriber.get_full_transcript()
         transcript_path = str(self.output_dir / "transcript.txt")
 
@@ -152,13 +155,30 @@ class BotverseTeamsBot:
         mom_text = self.mom_gen.generate(transcript, meeting_title, participants)
         self.mom_gen.save(mom_text, mom_path)
 
-        # Email the MoM if SMTP is configured
+        # Email the MoM — build recipient list from EMAIL_TO + ORGANIZER_EMAIL
         email_status = ""
+        recipients_set: set[str] = set()
         if EMAIL_TO:
+            recipients_set.update(r.strip() for r in EMAIL_TO.split(",") if r.strip())
+        if ORGANIZER_EMAIL:
+            recipients_set.add(ORGANIZER_EMAIL.strip())
+        # If organizer detected from Teams and matches a configured domain, note it
+        if organizer and not ORGANIZER_EMAIL:
+            logger.info("Organizer detected as '%s' — add ORGANIZER_EMAIL to .env to email them", organizer)
+
+        if recipients_set:
             from email_sender import EmailSender
-            sender = EmailSender()
-            sent = sender.send_mom(mom_text, mom_path, meeting_title, participants)
-            email_status = EMAIL_TO if sent else "failed (check log)"
+            import os
+            from config import SMTP_USER, SMTP_PASSWORD
+            if SMTP_USER and SMTP_PASSWORD:
+                # Temporarily override EMAIL_TO with the full recipient set
+                os.environ["EMAIL_TO"] = ",".join(recipients_set)
+                # Reload config value
+                import importlib, config as _cfg
+                importlib.reload(_cfg)
+                sender = EmailSender()
+                sent = sender.send_mom(mom_text, mom_path, meeting_title, participants)
+                email_status = ", ".join(recipients_set) if sent else "failed (check log)"
 
         # --- Summary printout ---
         print("\n" + "=" * 60)
