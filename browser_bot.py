@@ -17,11 +17,7 @@ _LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
     "--disable-dev-shm-usage",
-    # NOTE: --mute-audio is intentionally removed.
-    # WASAPI loopback records what Windows plays through speakers.
-    # The bot's Chrome must be allowed to play Teams audio so the
-    # loopback can capture it. Set your speaker volume to a normal
-    # level before starting a session.
+    "--mute-audio",  # Chrome stays silent — loopback captures Teams desktop app audio instead
     "--disable-infobars",
     "--disable-extensions",
     "--disable-popup-blocking",
