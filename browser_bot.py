@@ -396,9 +396,27 @@ class TeamsBrowserBot:
     # ------------------------------------------------------------------
 
     async def post_to_meeting_chat(self, message: str) -> bool:
-        """Post a message to the Teams meeting chat. Call this before leave_meeting()."""
+        """Post a message to the Teams meeting chat. Call this before leave_meeting().
+
+        When the host ends a Teams light-meeting, the bot is dropped back to the
+        join/lobby screen (camera+mic reset to ON) instead of a static 'meeting ended'
+        page. That lobby has no chat panel, so we briefly rejoin (muted) to deliver
+        the message, then the caller leaves again via leave_meeting().
+        """
         if not self._page:
             return False
+
+        # Detect the lobby/rejoin screen and rejoin briefly if needed
+        for sel in ["button:has-text('Join now')", "button:has-text('Rejoin')"]:
+            try:
+                await self._page.wait_for_selector(sel, timeout=2000)
+                await self._ensure_av_off()  # re-mute before rejoining
+                await self._page.click(sel, timeout=5000)
+                logger.info("Rejoined meeting briefly to post chat message")
+                await asyncio.sleep(6)
+                break
+            except Exception:
+                continue
 
         # Open the chat panel
         for sel in [
