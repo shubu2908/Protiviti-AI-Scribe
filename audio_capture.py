@@ -1,18 +1,15 @@
 import logging
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
-import soundcard as sc
+import pyaudiowpatch as pyaudio
 import soundfile as sf
 
 from config import (
-    AUDIO_CHANNELS,
     AUDIO_CHUNK_DURATION,
-    AUDIO_SAMPLE_RATE,
     OUTPUT_DIR,
     SILENCE_RMS_THRESHOLD,
 )
@@ -34,39 +31,44 @@ class AudioCapture:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_loopback(self) -> sc.core.Microphone:
-        """Return the first available WASAPI loopback device."""
-        # Preferred: default speaker's loopback via include_loopback
+    def _get_loopback(self) -> tuple:
+        """Return (PyAudio instance, loopback device info dict)."""
+        p = pyaudio.PyAudio()
         try:
-            speaker = sc.default_speaker()
-            loopback = sc.get_microphone(speaker.id, include_loopback=True)
-            logger.info("Using default speaker loopback: %s", speaker.name)
-            return loopback
-        except Exception as exc:
-            logger.warning("Default speaker loopback failed (%s), scanning all loopback mics…", exc)
+            wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+        except OSError:
+            p.terminate()
+            raise RuntimeError(
+                "WASAPI not available. This tool requires Windows 10/11 with WASAPI audio."
+            )
 
-        # Fallback: any loopback microphone in the system
+        # Find the default output device's loopback counterpart
         try:
-            loopbacks = [m for m in sc.all_microphones(include_loopback=True) if m.isloopback]
-            if loopbacks:
-                logger.info("Using loopback device: %s", loopbacks[0].name)
-                return loopbacks[0]
+            default_out = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
+            logger.info("Default output device: %s", default_out["name"])
         except Exception as exc:
-            logger.warning("Loopback mic scan failed (%s), trying all speakers…", exc)
+            p.terminate()
+            raise RuntimeError(f"Could not get default output device: {exc}")
 
-        # Last resort: iterate speakers and try get_microphone by id
-        for speaker in sc.all_speakers():
-            try:
-                loopback = sc.get_microphone(speaker.id, include_loopback=True)
-                logger.info("Using loopback from speaker: %s", speaker.name)
-                return loopback
-            except Exception:
-                continue
+        for lb in p.get_loopback_device_info_generator():
+            if default_out["name"] in lb["name"]:
+                logger.info("Loopback device: %s", lb["name"])
+                return p, lb
 
+        # Fallback: return the first available loopback
+        loopbacks = list(p.get_loopback_device_info_generator())
+        if loopbacks:
+            logger.warning(
+                "Default speaker loopback not found; using first available: %s",
+                loopbacks[0]["name"],
+            )
+            return p, loopbacks[0]
+
+        p.terminate()
         raise RuntimeError(
             "No WASAPI loopback device found.\n"
-            "Make sure you are on Windows 10/11 and audio is playing through any output device.\n"
-            "Verify that 'soundcard' is installed: pip install soundcard"
+            "Make sure you are on Windows 10/11 and audio output is active.\n"
+            "Check: Start → Sound Settings → Output device is set correctly."
         )
 
     def _is_silent(self, audio_data: np.ndarray) -> bool:
@@ -78,46 +80,81 @@ class AudioCapture:
     # ------------------------------------------------------------------
 
     def _record_loop(self) -> None:
-        frames_per_chunk = AUDIO_CHUNK_DURATION * AUDIO_SAMPLE_RATE
         try:
-            loopback = self._get_loopback()
+            p, lb = self._get_loopback()
         except RuntimeError as exc:
             logger.error("AudioCapture: %s", exc)
             return
 
-        logger.info("AudioCapture: recording started (chunk=%ds, rate=%d Hz)", AUDIO_CHUNK_DURATION, AUDIO_SAMPLE_RATE)
+        sample_rate = int(lb["defaultSampleRate"])
+        channels = lb["maxInputChannels"]
+        frames_per_buffer = 512
+        frames_per_chunk = sample_rate * AUDIO_CHUNK_DURATION
 
-        with loopback.recorder(samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS) as recorder:
+        logger.info(
+            "AudioCapture started: %s | %d Hz | %d ch | chunk=%ds",
+            lb["name"], sample_rate, channels, AUDIO_CHUNK_DURATION,
+        )
+
+        stream = p.open(
+            format=pyaudio.paInt16,
+            channels=channels,
+            rate=sample_rate,
+            frames_per_buffer=frames_per_buffer,
+            input=True,
+            input_device_index=lb["index"],
+        )
+
+        try:
             while not self._stop_event.is_set():
-                try:
-                    data: np.ndarray = recorder.record(numframes=frames_per_chunk)
-                except Exception as exc:
-                    logger.error("AudioCapture record error: %s", exc)
+                raw_frames: list[bytes] = []
+                frames_recorded = 0
+                reads_needed = frames_per_chunk // frames_per_buffer
+
+                for _ in range(reads_needed):
+                    if self._stop_event.is_set():
+                        break
+                    try:
+                        data = stream.read(frames_per_buffer, exception_on_overflow=False)
+                        raw_frames.append(data)
+                        frames_recorded += frames_per_buffer
+                    except Exception as exc:
+                        logger.error("Stream read error: %s", exc)
+                        break
+
+                if not raw_frames:
                     break
 
-                # Flatten to mono if soundcard returned stereo
-                if data.ndim > 1:
-                    data = data.mean(axis=1)
+                # Convert int16 bytes → float32 numpy array
+                pcm = np.frombuffer(b"".join(raw_frames), dtype=np.int16).astype(np.float32)
+                pcm /= 32768.0
+
+                # Mix stereo → mono
+                if channels > 1:
+                    pcm = pcm.reshape(-1, channels).mean(axis=1)
 
                 idx = self._chunk_index
                 self._chunk_index += 1
 
-                if self._is_silent(data):
+                if self._is_silent(pcm):
                     logger.debug("Chunk %04d is silent — skipping", idx)
                     continue
 
                 timestamp = datetime.now().strftime("%H%M%S")
                 filename = str(self._output_dir / f"chunk_{idx:04d}_{timestamp}.wav")
                 try:
-                    sf.write(filename, data, AUDIO_SAMPLE_RATE, subtype="PCM_16")
+                    sf.write(filename, pcm, sample_rate, subtype="PCM_16")
                     logger.info("Saved audio chunk: %s", filename)
                     self._saved_files.append(filename)
                     if self._callback:
                         self._callback(filename, idx)
                 except Exception as exc:
                     logger.error("Failed to save chunk %04d: %s", idx, exc)
-
-        logger.info("AudioCapture: recording thread exited")
+        finally:
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+            logger.info("AudioCapture: recording thread exited")
 
     # ------------------------------------------------------------------
     # Public API
