@@ -327,8 +327,12 @@ class TeamsBrowserBot:
             "[data-tid='call-ended-banner']",
             "text=You left the meeting",
             "text=You've left the meeting",
-            # Light meeting (meet/ URLs) — shows Rejoin when host ends
+            # Light meeting (meet/ URLs): briefly shows "Rejoin", then auto-settles into
+            # the full lobby page with a "Join now" button — both mean the bot got kicked
+            # out of the meeting room. wait_for_meeting_end() only runs after a successful
+            # join, so seeing either of these again can only mean the meeting ended.
             "button:has-text('Rejoin')",
+            "button:has-text('Join now')",
             "text=Return to home",
             "text=Go back",
         ]
