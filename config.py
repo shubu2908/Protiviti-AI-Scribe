@@ -26,5 +26,6 @@ AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
 SILENCE_RMS_THRESHOLD = 0.005
 MAX_MEETING_DURATION = 3 * 60 * 60  # 3 hours in seconds
+SILENCE_TIMEOUT_MINUTES = 10  # stop if silent this long after speech was heard (selector-failure safety net)
 OUTPUT_DIR = "meeting_output"
 TRANSCRIPTION_DELAY = 3            # seconds between Gemini API calls (free-tier pacing)

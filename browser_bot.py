@@ -317,50 +317,66 @@ class TeamsBrowserBot:
                 pass
             await asyncio.sleep(30)
 
-    async def wait_for_meeting_end(self, poll_interval: int = 15) -> None:
-        end_selectors = [
+    async def wait_for_meeting_end(self, poll_interval: int = 3) -> None:
+        """Poll for meeting-end signals using instant (non-blocking) DOM checks.
+
+        Prefers data-tid attributes (Microsoft's internal test hooks — stable across
+        locales and most UI redesigns) over visible text, which breaks on non-English
+        Teams installs and is the most fragile thing to match against.
+        """
+        # data-tid is locale-independent; reuses the SAME button used by _click_join()
+        # since the post-meeting lobby and the original pre-join page are the same UI.
+        lobby_data_tid_selectors = ["[data-tid='prejoin-join-button']"]
+        ended_data_tid_selectors = ["[data-tid='meeting-ended-banner']", "[data-tid='call-ended-banner']"]
+        # Text fallbacks for installs/versions where the data-tid hooks differ
+        text_fallback_selectors = [
             "text=The meeting has ended",
             "text=Meeting ended",
             "text=This meeting has ended",
             "text=This call has ended",
             "text=Call ended",
-            "[data-tid='meeting-ended-banner']",
-            "[data-tid='call-ended-banner']",
             "text=You left the meeting",
             "text=You've left the meeting",
-            # Light meeting (meet/ URLs): briefly shows "Rejoin", then auto-settles into
-            # the full lobby page with a "Join now" button — both mean the bot got kicked
-            # out of the meeting room. wait_for_meeting_end() only runs after a successful
-            # join, so seeing either of these again can only mean the meeting ended.
             "button:has-text('Rejoin')",
             "button:has-text('Join now')",
             "text=Return to home",
             "text=Go back",
         ]
-        # Selectors that mean we're back at the lobby/pre-join screen — there's nothing
-        # to "leave" anymore, so leave_meeting() should skip straight to closing.
-        lobby_selectors = {"button:has-text('Rejoin')", "button:has-text('Join now')"}
+        lobby_text_selectors = {"button:has-text('Rejoin')", "button:has-text('Join now')"}
 
         meeting_url_fragment = self._page.url
-        logger.info("Watching for meeting-end signals (poll every %ds)…", poll_interval)
-        while True:
-            # Check text/element selectors
-            for sel in end_selectors:
-                try:
-                    await self._page.wait_for_selector(sel, timeout=poll_interval * 1000)
-                    logger.info("Meeting-end detected via selector: %s", sel)
-                    self.is_in_meeting = False
-                    if sel in lobby_selectors:
-                        self._already_disconnected = True
-                    return
-                except Exception:
-                    continue
+        logger.info("Watching for meeting-end signals (instant checks, poll every %ds)…", poll_interval)
 
-            # Check if page navigated away from the meeting (URL changed significantly)
+        while True:
+            # Instant checks — query_selector returns immediately, never blocks
+            try:
+                for sel in lobby_data_tid_selectors:
+                    if await self._page.query_selector(sel):
+                        logger.info("Meeting-end detected via data-tid: %s", sel)
+                        self.is_in_meeting = False
+                        self._already_disconnected = True
+                        return
+
+                for sel in ended_data_tid_selectors:
+                    if await self._page.query_selector(sel):
+                        logger.info("Meeting-end detected via data-tid: %s", sel)
+                        self.is_in_meeting = False
+                        return
+
+                for sel in text_fallback_selectors:
+                    if await self._page.query_selector(sel):
+                        logger.info("Meeting-end detected via text fallback: %s", sel)
+                        self.is_in_meeting = False
+                        if sel in lobby_text_selectors:
+                            self._already_disconnected = True
+                        return
+            except Exception:
+                pass  # page may be navigating; just retry next poll
+
+            # URL-change fallback
             try:
                 current_url = self._page.url
                 if current_url and meeting_url_fragment:
-                    # If we've been redirected away from the meeting page entirely
                     in_meeting_url = any(kw in current_url for kw in [
                         "meet/", "meetup-join", "light-meetings/launch", "light-meetings/meeting"
                     ])

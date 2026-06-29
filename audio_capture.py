@@ -12,6 +12,7 @@ from config import (
     AUDIO_CHUNK_DURATION,
     OUTPUT_DIR,
     SILENCE_RMS_THRESHOLD,
+    SILENCE_TIMEOUT_MINUTES,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,8 @@ class AudioCapture:
         self._lb_stream = None   # kept so stop() can forcefully close it
         self._mic_stream = None
         self._pa_instance = None
+        self._had_speech = False           # True once any non-silent chunk was captured
+        self._consecutive_silent_chunks = 0  # used as a meeting-end safety net
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -81,7 +84,11 @@ class AudioCapture:
         if self._is_silent(data):
             logger.debug("Chunk %04d is silent — skipping", self._chunk_index)
             self._chunk_index += 1
+            self._consecutive_silent_chunks += 1
             return
+
+        self._had_speech = True
+        self._consecutive_silent_chunks = 0
 
         idx = self._chunk_index
         self._chunk_index += 1
@@ -234,3 +241,10 @@ class AudioCapture:
             self._thread.join(timeout=10)
         logger.info("AudioCapture stopped. %d chunks saved.", len(self._saved_files))
         return list(self._saved_files)
+
+    def likely_meeting_ended(self) -> bool:
+        """Safety net: True if speech was heard earlier but it's now been silent
+        for SILENCE_TIMEOUT_MINUTES straight — used when browser-based end
+        detection might fail (e.g. a Teams UI change on another machine)."""
+        silence_minutes = self._consecutive_silent_chunks * AUDIO_CHUNK_DURATION / 60
+        return self._had_speech and silence_minutes >= SILENCE_TIMEOUT_MINUTES

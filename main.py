@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from config import GEMINI_API_KEY, MAX_MEETING_DURATION, OUTPUT_DIR, EMAIL_TO, ORGANIZER_EMAIL
+from config import GEMINI_API_KEY, MAX_MEETING_DURATION, OUTPUT_DIR, EMAIL_TO, ORGANIZER_EMAIL, SILENCE_TIMEOUT_MINUTES
 from audio_capture import AudioCapture
 from browser_bot import TeamsBrowserBot
 from mom_generator import MoMGenerator
@@ -55,6 +55,15 @@ class ProtivitiTeamsBot:
     def _on_chunk(self, chunk_path: str, chunk_index: int) -> None:
         """Transcribe each audio chunk as it arrives (called from the recording thread)."""
         self.transcriber.transcribe_chunk(chunk_path, chunk_index)
+
+    async def _silence_watchdog(self, check_interval: int = 30) -> None:
+        """Safety net: returns once the audio has been silent for SILENCE_TIMEOUT_MINUTES
+        after speech was heard — catches cases where browser-based end detection
+        fails (e.g. a Teams UI variant on another machine)."""
+        while True:
+            await asyncio.sleep(check_interval)
+            if self.audio.likely_meeting_ended():
+                return
 
     # ------------------------------------------------------------------
     # Session-save flow
@@ -107,17 +116,29 @@ class ProtivitiTeamsBot:
             # 5. Keep the browser alive in a background task
             keep_alive_task = asyncio.create_task(self.browser.keep_alive())
 
-            # 6. Wait for meeting end (or timeout / keyboard interrupt)
+            # 6. Wait for meeting end: race browser-detection against the audio
+            # silence watchdog (safety net if Teams' UI differs on another machine)
             logger.info("Waiting for meeting to end (max %dh)…", MAX_MEETING_DURATION // 3600)
+            browser_end_task = asyncio.create_task(self.browser.wait_for_meeting_end())
+            silence_task = asyncio.create_task(self._silence_watchdog())
             try:
-                await asyncio.wait_for(
-                    self.browser.wait_for_meeting_end(),
+                done, pending = await asyncio.wait_for(
+                    asyncio.wait([browser_end_task, silence_task], return_when=asyncio.FIRST_COMPLETED),
                     timeout=MAX_MEETING_DURATION,
                 )
-                logger.info("Meeting ended naturally")
+                for task in pending:
+                    task.cancel()
+                if silence_task in done and not browser_end_task.done():
+                    logger.warning("Meeting-end inferred from %d minutes of silence (selector fallback)", SILENCE_TIMEOUT_MINUTES)
+                else:
+                    logger.info("Meeting ended naturally")
             except asyncio.TimeoutError:
+                browser_end_task.cancel()
+                silence_task.cancel()
                 logger.warning("Maximum meeting duration reached (%dh) — leaving", MAX_MEETING_DURATION // 3600)
             except (KeyboardInterrupt, asyncio.CancelledError):
+                browser_end_task.cancel()
+                silence_task.cancel()
                 logger.info("Interrupted by user — leaving meeting")
 
             # 7. Cancel keep-alive
