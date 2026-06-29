@@ -164,6 +164,20 @@ class ProtivitiTeamsBot:
         self, meeting_title: str, participants: list[str], organizer: str = "", meeting_url: str = ""
     ) -> None:
         transcript = self.transcriber.get_full_transcript()
+
+        # Prefer the official Teams transcript (real speaker names) if transcription
+        # was started during the call. Falls back to the live Gemini-based transcript
+        # (generic "Speaker 1/2/...") if unavailable.
+        if meeting_url:
+            from graph_client import GraphChatPoster
+            graph = GraphChatPoster()
+            if graph.configured:
+                logger.info("Checking for official Teams transcript (real speaker names)…")
+                official = graph.get_transcript(meeting_url)
+                if official and official.strip():
+                    logger.info("Using official Teams transcript with real speaker names")
+                    transcript = official
+
         transcript_path = str(self.output_dir / "transcript.txt")
 
         # Always write transcript file
@@ -207,7 +221,7 @@ class ProtivitiTeamsBot:
         if mom_text and meeting_url:
             from graph_client import GraphChatPoster
             from mom_generator import MoMGenerator
-            poster = GraphChatPoster()
+            poster = GraphChatPoster()  # reuses the same cached token as the transcript lookup above
             if poster.configured:
                 chat_html = MoMGenerator.format_for_teams_chat_html(mom_text, meeting_title)
                 posted = poster.post_mom(meeting_url, chat_html)
